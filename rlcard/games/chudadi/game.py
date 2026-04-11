@@ -4,12 +4,12 @@ from rlcard.games.chudadi.dealer import ChuDaDiDealer as Dealer
 from rlcard.games.chudadi.judger import ChuDaDiJudger as Judger
 from rlcard.games.chudadi.player import ChuDaDiPlayer as Player
 from rlcard.games.chudadi.round import ChuDaDiRound as Round
-from rlcard.games.chudadi.utils import cards_to_str
 
 
 class ChuDaDiGame:
-    def __init__(self, allow_step_back=False):
+    def __init__(self, allow_step_back=False, northern_rule=True):
         self.allow_step_back = allow_step_back
+        self.northern_rule = northern_rule
         self.np_random = np.random.RandomState()
         self.num_players = 4
         self.state = None
@@ -20,9 +20,9 @@ class ChuDaDiGame:
         self.history = []
         self.players = [Player(player_id) for player_id in range(self.num_players)]
         self.dealer = Dealer(self.np_random)
-        self.round = Round(self.np_random, self.num_players)
+        self.round = Round(self.np_random, self.num_players, self.northern_rule)
         self.round.initiate(self.players, self.dealer)
-        self.judger = Judger(self.np_random)
+        self.judger = Judger(self.np_random, self.northern_rule)
         player_id = self.round.current_player
         self.state = self.get_state(player_id)
         return self.state, player_id
@@ -81,11 +81,12 @@ class ChuDaDiGame:
             "actions": action_ids,
             "raw_legal_actions": raw_actions,
             "trace": list(self.round.trace),
+            "northern_rule": self.northern_rule,
         }
         return state
 
     def get_payoffs(self):
-        return self.judger.judge_payoffs(self.players, self.winner_id)
+        return self.judger.judge_payoffs(self.players, self.winner_id, self.northern_rule)
 
     def get_player_id(self):
         return self.round.current_player

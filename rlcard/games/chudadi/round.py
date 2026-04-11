@@ -2,9 +2,10 @@ from rlcard.games.chudadi.utils import START_CARD, make_action
 
 
 class ChuDaDiRound:
-    def __init__(self, np_random, num_players):
+    def __init__(self, np_random, num_players, northern_rule=True):
         self.np_random = np_random
         self.num_players = num_players
+        self.northern_rule = northern_rule
         self.current_player = 0
         self.starting_player = 0
         self.last_action = None

@@ -78,6 +78,13 @@ class TestChudadiEnv(unittest.TestCase):
                 None,
             ),
             (
+                "triple",
+                [Card("D", "8"), Card("H", "8"), Card("S", "8")],
+                3,
+                RANK_TO_VALUE["8"],
+                None,
+            ),
+            (
                 "straight",
                 [
                     Card("D", "7"),
@@ -86,7 +93,7 @@ class TestChudadiEnv(unittest.TestCase):
                     Card("S", "T"),
                     Card("D", "J"),
                 ],
-                3,
+                4,
                 RANK_TO_VALUE["J"],
                 RANK_TO_VALUE["T"],
             ),
@@ -99,7 +106,7 @@ class TestChudadiEnv(unittest.TestCase):
                     Card("H", "9"),
                     Card("H", "J"),
                 ],
-                4,
+                5,
                 RANK_TO_VALUE["J"],
                 RANK_TO_VALUE["9"],
             ),
@@ -112,7 +119,7 @@ class TestChudadiEnv(unittest.TestCase):
                     Card("S", "4"),
                     Card("H", "4"),
                 ],
-                5,
+                6,
                 RANK_TO_VALUE["K"],
                 RANK_TO_VALUE["4"],
             ),
@@ -125,7 +132,7 @@ class TestChudadiEnv(unittest.TestCase):
                     Card("S", "Q"),
                     Card("D", "3"),
                 ],
-                6,
+                7,
                 RANK_TO_VALUE["Q"],
                 RANK_TO_VALUE["3"],
             ),
@@ -138,7 +145,7 @@ class TestChudadiEnv(unittest.TestCase):
                     Card("S", "Q"),
                     Card("S", "K"),
                 ],
-                7,
+                8,
                 RANK_TO_VALUE["K"],
                 RANK_TO_VALUE["Q"],
             ),
@@ -146,19 +153,19 @@ class TestChudadiEnv(unittest.TestCase):
 
         for _, cards, type_index, main_index, kicker_index in cases:
             feature, hand = self._get_feature(cards, extra_cards=extra)
-            self.assertEqual(feature.size, 138)
+            self.assertEqual(feature.size, 140)
             self._assert_action_future_bits(feature, cards, hand)
-            self._assert_one_hot(feature[104:112], type_index)
-            self._assert_one_hot(feature[112:125], main_index)
-            self._assert_one_hot(feature[125:138], kicker_index)
+            self._assert_one_hot(feature[104:114], type_index)
+            self._assert_one_hot(feature[114:127], main_index)
+            self._assert_one_hot(feature[127:140], kicker_index)
 
     def test_action_feature_pass(self):
         feature, hand = self._get_feature([], extra_cards=[Card("D", "3")])
-        self.assertEqual(feature.size, 138)
+        self.assertEqual(feature.size, 140)
         self.assertEqual(int(feature[:52].sum()), 0)
-        self._assert_one_hot(feature[104:112], 0)
-        self._assert_one_hot(feature[112:125], None)
-        self._assert_one_hot(feature[125:138], None)
+        self._assert_one_hot(feature[104:114], 0)
+        self._assert_one_hot(feature[114:127], None)
+        self._assert_one_hot(feature[127:140], None)
         idx = card_to_id(hand[0])
         self.assertEqual(int(feature[52 + idx]), 1)
 
@@ -207,24 +214,45 @@ class TestChudadiEnv(unittest.TestCase):
         self.assertTrue(actions)
         self.assertTrue(all(action.action_type != "pass" for action in actions))
 
-    def test_scoring_twos_and_chudadi_bonus(self):
+    def test_scoring_northern_rule(self):
+        """Test northern rule scoring:
+        - Winner: 0 points
+        - >= 13 cards: triple
+        - >= 10 cards: double
+        - Never played: 39 points
+        - Others: remaining count
+        """
         players = [ChuDaDiPlayer(pid) for pid in range(4)]
-        players[0].set_current_hand([])
+        players[0].set_current_hand([])  # winner
         players[1].set_current_hand(
             self._make_cards(
                 ["2", "2", "A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4"]
-            )
+            )  # 13 cards -> 13 * 3 = 39
         )
         players[2].set_current_hand(
-            self._make_cards(["2", "A", "K", "Q", "J", "T", "9", "8"])
+            self._make_cards(["2", "A", "K", "Q", "J", "T", "9", "8"])  # 8 cards -> 8
         )
-        players[3].set_current_hand(self._make_cards(["A", "K", "Q"]))
+        players[3].set_current_hand(self._make_cards(["A", "K", "Q"]))  # 3 cards -> 3
 
-        payoffs = ChuDaDiJudger(None).judge_payoffs(players, winner_id=0)
-        self.assertEqual(payoffs[0], 10)
-        self.assertEqual(payoffs[1], -41)
-        self.assertEqual(payoffs[2], -17)
-        self.assertEqual(payoffs[3], -3)
+        # Mark players as having played cards (not "never played")
+        for i in range(1, 4):
+            players[i].played_cards = [Card("D", "3")]
+
+        payoffs = ChuDaDiJudger(None, northern_rule=True).judge_payoffs(players, winner_id=0)
+        self.assertEqual(payoffs[0], 0)   # winner
+        self.assertEqual(payoffs[1], -39)  # 13 cards * 3
+        self.assertEqual(payoffs[2], -8)   # 8 cards
+        self.assertEqual(payoffs[3], -3)   # 3 cards
+
+    def test_scoring_never_played(self):
+        """Test northern rule: never played = 39 points."""
+        players = [ChuDaDiPlayer(pid) for pid in range(4)]
+        players[0].set_current_hand([])  # winner
+        players[1].set_current_hand([Card("D", "3")])  # 1 card but never played
+        # played_cards is empty -> never played
+
+        payoffs = ChuDaDiJudger(None, northern_rule=True).judge_payoffs(players, winner_id=0)
+        self.assertEqual(payoffs[1], -39)  # never played = 39
 
 
 if __name__ == "__main__":

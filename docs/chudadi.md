@@ -5,11 +5,12 @@
 
 ## 关键规则实现
 - 起手必须包含 `方块3`。
-- 牌型支持单张、对子、顺子、同花、葫芦、铁支、同花顺。
+- 牌型支持单张、对子、三张、顺子、同花、葫芦（三带二）、铁支（4+1）、同花顺、炸弹。
 - 顺子、同花、同花顺 **仅允许 5 张**，且不允许包含 2。
-- 只能用同类型牌型压牌，且点数与花色按规则比较。
-- 有牌必出：能压牌时不可 `pass`，仅在无法压牌时可 `pass`。
-- 计分包含：基本`剩牌`分、`大老二`额外加分、`锄大地`奖励。
+- 只能用同类型牌型压牌（炸弹可跨牌型，北方规则有条件），且点数与花色按规则比较。
+- **北方规则**：有牌必出（手上有同类型且可压的牌时必须出，不能 `pass`）；炸弹仅在无同牌型可压时才可出；同花顺 > 炸弹。
+- **南方规则**：可自由 `pass`；炸弹可压万物且随时打断；炸弹 > 同花顺。
+- 计分包含：基本剩牌分、`大老二`（持 2 扣分）额外加分、`锄大地`奖励。
 
 ## 动作空间说明
 - 使用 52 位掩码作为动作 ID，表示具体出牌组合。
@@ -17,11 +18,11 @@
 - `num_actions = 2**52`，精确但不适配 DQN/NFSP/CFR/RandomAgent 的密集动作空间假设。
 - 如需训练，建议使用 `DMC` 或 自定义策略模型。
 
-## 状态表示（332 维）
+## 状态表示（335 维）
 状态向量由以下部分拼接组成：
 - `current_hand`（52）：当前手牌多热，编码顺序为 `[D, C, H, S] x [3..K, A, 2]`。
 - `last_action`（52）：上一手牌的多热，编码顺序同上。
-- `action_type_one_hot`（8）：上一手牌型，含 `none`。
+- `action_type_one_hot`（10）：上一手牌型，含 `none`/`single`/`pair`/`triple`/`straight`/`flush`/`full_house`/`four_of_a_kind`/`straight_flush`/`bomb`。
 - `action_length_one_hot`（14）：上一手牌张数（0..13）。
 - `leader_relative_pos`（3）：领出者相对于自己的位置（下家/对家/上家），自己领出则全 0。
 - `cards_left`（42）：下家/对家/上家剩牌数 one-hot（每人 14 维，0..13）。
@@ -29,19 +30,20 @@
 - `is_leader`（1）：当前是否轮到自己领出（上一手为空）。
 - `relative_pass_mask`（3）：下家/对家/上家在当前轮次是否已 `pass`。
 - `is_next_warning`（1）：下家是否只剩 1 张牌。
+- `is_northern_rule`（1）：当前是否使用北方规则（1=北方，0=南方）。
 
 ## 训练方法
 推荐使用 `DMC` （基于动作特征），避免巨大动作空间带来的不可枚举问题。
 
 说明：
-- DMC 会使用 `ChudadiEnv.get_action_feature` 输出的 138 维动作特征（`action(52)` + `future_hand(52)` + `action_type(8)` + `action_main_rank(13)` + `action_kicker_rank(13)`）。
+- DMC 会使用 `ChudadiEnv.get_action_feature` 输出的 140 维动作特征（`action(52)` + `future_hand(52)` + `action_type(10)` + `action_main_rank(13)` + `action_kicker_rank(13)`）。
 - 如果需要评估，可用自定义脚本调用 `env.run(is_training=False)` 或用 `tournament` 评估（`examples/evaluate.py` 同样需要把 `chudadi` 加入 `choices`）。
 
-## 动作特征（138 维）
+## 动作特征（140 维）
 为了解决“打出大牌会被高估、却忽略机会成本”的问题，动作特征在 `action(52)` 基础上拼接 `future_hand(52)`，并显式加入牌型与主牌/副牌信息：
 - `action(52)`：本次出牌的多热。
 - `future_hand(52)`：执行该动作后，手里剩余牌的多热（即 `current_hand - action`）。
-- `action_type(8)`：`none`/`single`/`pair`/`straight`/`flush`/`full_house`/`four_of_a_kind`/`straight_flush` 的 one-hot。
+- `action_type(10)`：`none`/`single`/`pair`/`triple`/`straight`/`flush`/`full_house`/`four_of_a_kind`/`straight_flush`/`bomb` 的 one-hot。
 - `action_main_rank(13)`：用于比较大小的核心点数 one-hot（如 `KKKAA` 和 `KKK44` 均为 `K`）。
 - `action_kicker_rank(13)`：副牌点数 one-hot，在 `straight`/`flush`/`straight_flush` 使用次大牌点数，其它牌型按规则（如 `full_house`/`four_of_a_kind`）设置，非适用则为 0。
 
@@ -49,9 +51,9 @@
 
 ## DMC 训练流程简图
 ```text
-state(obs=332) + action_feature(138)
+state(obs=335) + action_feature(140)
             \         /
-            concat(470)
+            concat(475)
                  |
                MLP x5
                  |

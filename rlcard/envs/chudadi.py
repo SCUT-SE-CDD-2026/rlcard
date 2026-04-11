@@ -15,26 +15,31 @@ class ChudadiEnv(Env):
         from rlcard.games.chudadi import Game
 
         self.name = "chudadi"
-        self.game = Game()
+        # Northern rule is the default
+        self.northern_rule = config.get("northern_rule", True)
+        self.game = Game(northern_rule=self.northern_rule)
         super().__init__(config)
 
         self._action_types = [
             "none",
             "single",
             "pair",
+            "triple",
             "straight",
             "flush",
             "full_house",
-            "four_of_a_kind",
+            "four_of_a_kind",  # 4+1 铁支
             "straight_flush",
+            "bomb",  # 4张裸出 炸弹
         ]
         self._action_type_to_index = {
             name: idx for idx, name in enumerate(self._action_types)
         }
         self._bit_positions = np.arange(52, dtype=np.uint64)
 
-        self.state_shape = [[332] for _ in range(self.num_players)]
-        self.action_shape = [[138] for _ in range(self.num_players)]
+        # 332 + 2 (triple + bomb type) + 1 (is_northern_rule flag) = 335
+        self.state_shape = [[335] for _ in range(self.num_players)]
+        self.action_shape = [[140] for _ in range(self.num_players)]
 
     def _extract_state(self, state):
         player_id = state["current_player"]
@@ -75,6 +80,8 @@ class ChudadiEnv(Env):
             else 0
         )
 
+        is_northern_rule = 1 if self.northern_rule else 0
+
         obs = np.concatenate(
             [
                 current_hand,
@@ -91,6 +98,7 @@ class ChudadiEnv(Env):
                 np.asarray([is_leader], dtype=np.int8),
                 relative_pass_mask,
                 np.asarray([is_next_warning], dtype=np.int8),
+                np.asarray([is_northern_rule], dtype=np.int8),
             ]
         )
 
@@ -152,7 +160,7 @@ class ChudadiEnv(Env):
             current_hand,
         )
         if features.size == 0:
-            return np.zeros(138, dtype=np.int8)
+            return np.zeros(self.action_shape[0], dtype=np.int8)
         return features[0]
 
     def _cards_to_array(self, cards):
@@ -198,12 +206,9 @@ class ChudadiEnv(Env):
                 mask[rel_index] = 1
         return mask
 
-    def _action_id_to_array(self, action_id):
-        return self._action_ids_to_arrays(np.asarray([action_id], dtype=np.uint64))[0]
-
     def _action_ids_to_features(self, action_ids, current_hand):
         if action_ids.size == 0:
-            return np.zeros((0, 138), dtype=np.int8)
+            return np.zeros((0, self.action_shape[0][0]), dtype=np.int8)
         action_bits = self._action_ids_to_arrays(action_ids)
         current_hand_bits = (
             self._cards_to_array(current_hand)
