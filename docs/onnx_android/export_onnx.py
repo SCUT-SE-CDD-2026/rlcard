@@ -109,6 +109,11 @@ def main() -> None:
     )
     parser.add_argument("--obs-name", default="obs")
     parser.add_argument("--action-name", default="actions")
+    parser.add_argument(
+        "--single-file",
+        action="store_true",
+        help="Embed weights into a single .onnx file instead of writing external .onnx.data",
+    )
     args = parser.parse_args()
 
     dtype = resolve_dtype(args.dtype)
@@ -143,6 +148,7 @@ def main() -> None:
             output_names=[args.output_name],
             dynamic_axes=dynamic_axes,
             do_constant_folding=True,
+            external_data=not args.single_file,
         )
     else:
         if not args.input_shape:
@@ -170,6 +176,7 @@ def main() -> None:
             output_names=[args.output_name],
             dynamic_axes=dynamic_axes,
             do_constant_folding=True,
+            external_data=not args.single_file,
         )
     print(f"Exported {args.onnx}")
 

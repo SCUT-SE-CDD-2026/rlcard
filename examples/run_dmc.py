@@ -9,7 +9,10 @@ from rlcard.agents.dmc_agent import DMCTrainer
 
 def train(args):
     # Make the environment
-    env = rlcard.make(args.env)
+    config = {}
+    if args.env == "chudadi":
+        config["northern_rule"] = args.rule == "northern"
+    env = rlcard.make(args.env, config=config)
     # Initialize the DMC trainer
     trainer = DMCTrainer(
         env,
@@ -21,6 +24,7 @@ def train(args):
         num_actor_devices=args.num_actor_devices,
         num_actors=args.num_actors,
         training_device=args.training_device,
+        total_frames=args.total_frames,
     )
     # Train DMC Agents
     trainer.start()
@@ -87,6 +91,18 @@ if __name__ == "__main__":
         default="0",
         type=str,
         help="The index of the GPU used for training models",
+    )
+    parser.add_argument(
+        "--total_frames",
+        default=100000000000,
+        type=int,
+        help="Total environment frames to train for",
+    )
+    parser.add_argument(
+        "--rule",
+        default="northern",
+        choices=["northern", "southern"],
+        help="ChuDaDi rule set to use during training",
     )
 
     args = parser.parse_args()

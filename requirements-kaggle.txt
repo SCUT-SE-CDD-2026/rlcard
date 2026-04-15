@@ -1,0 +1,15 @@
+# Kaggle-oriented extra dependencies for this repository.
+#
+# Recommended install flow on Kaggle:
+#   pip install -e .[torch]
+#   pip install -r requirements-kaggle.txt
+#
+# Notes:
+# - Kaggle images usually already include a working GPU-enabled PyTorch.
+# - Avoid pinning a Windows-specific torch build like 2.11.0+cu128 here.
+# - onnxruntime-gpu is optional unless you need ONNX GPU inference/evaluation.
+
+pytest==9.0.3
+onnx==1.21.0
+onnxscript==0.6.2
+onnxruntime-gpu==1.24.4

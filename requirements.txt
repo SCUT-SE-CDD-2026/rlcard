@@ -1,0 +1,17 @@
+# Core project dependencies
+numpy==2.4.4
+termcolor==3.3.0
+
+# Training stack
+torch==2.11.0+cu128
+GitPython==3.1.46
+gitdb2==4.0.2
+matplotlib==3.10.8
+
+# Testing
+pytest==9.0.3
+
+# ONNX export / inference
+onnx==1.21.0
+onnxruntime-gpu==1.24.4
+onnxscript==0.6.2
