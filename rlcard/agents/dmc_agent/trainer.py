@@ -58,12 +58,15 @@ def learn(
     device = "cuda:"+str(training_device) if training_device != "cpu" else "cpu"
     state = torch.flatten(batch['state'].to(device, non_blocking=True), 0, 1).float()
     action = torch.flatten(batch['action'].to(device, non_blocking=True), 0, 1).float()
+    history = None
+    if 'history' in batch:
+        history = torch.flatten(batch['history'].to(device, non_blocking=True), 0, 1).float()
     target = torch.flatten(batch['target'].to(device, non_blocking=True), 0, 1)
     episode_returns = batch['episode_return'][batch['done']]
     mean_episode_return_buf[position].append(torch.mean(episode_returns))
 
     with lock:
-        values = agent.forward(state, action)
+        values = agent.forward(state, action, history) if history is not None else agent.forward(state, action)
         loss = compute_loss(values, target)
         stats = {
             'mean_episode_return_'+str(position): torch.mean(torch.stack([_r for _r in mean_episode_return_buf[position]])).item(),
@@ -127,7 +130,9 @@ class DMCTrainer:
         learning_rate=0.0001,
         alpha=0.99,
         momentum=0,
-        epsilon=0.00001
+        epsilon=0.00001,
+        model_version="v1",
+        history_shape=None,
     ):
         self.env = env
 
@@ -158,6 +163,8 @@ class DMCTrainer:
         self.alpha = alpha
         self.momentum = momentum
         self.epsilon = epsilon
+        self.model_version = model_version
+        self.history_shape = history_shape
 
         self.is_pettingzoo_env = is_pettingzoo_env
         if not self.is_pettingzoo_env:
@@ -165,6 +172,8 @@ class DMCTrainer:
             self.action_shape = self.env.action_shape
             if self.action_shape[0] == None:  # One-hot encoding
                 self.action_shape = [[self.env.num_actions] for _ in range(self.num_players)]
+            if self.model_version == "v2":
+                self.history_shape = history_shape or self.env.history_shape
 
             def model_func(device):
                 return DMCModel(
@@ -172,6 +181,8 @@ class DMCTrainer:
                     self.action_shape,
                     exp_epsilon=self.exp_epsilon,
                     device=str(device),
+                    model_version=self.model_version,
+                    history_shape=self.history_shape,
                 )
         else:
             self.num_players = self.env.num_agents
@@ -211,6 +222,7 @@ class DMCTrainer:
                 self.action_shape,
                 self.device_iterator,
                 pin_memory=pin_memory,
+                history_shape=self.history_shape if self.model_version == "v2" else None,
             )
         else:
             buffers, self.num_buffers = create_buffers_pettingzoo(
@@ -342,6 +354,10 @@ class DMCTrainer:
                 'optimizer_state_dict': [optimizer.state_dict() for optimizer in optimizers],
                 "stats": stats,
                 'frames': frames,
+                'model_version': self.model_version,
+                'state_shape': self.env.state_shape,
+                'action_shape': self.action_shape,
+                'history_shape': self.history_shape,
             }, self.checkpointpath)
 
             # Save the weights for evaluation purpose
@@ -375,10 +391,13 @@ class DMCTrainer:
                 )
         except KeyboardInterrupt:
             return
-        else:
-            for thread in threads:
-                thread.join()
-            log.info('Learning finished after %d frames.', frames)
+        finally:
+            for actor in actor_processes:
+                if actor.is_alive():
+                    actor.terminate()
+            for actor in actor_processes:
+                actor.join(timeout=1)
 
+        log.info('Learning finished after %d frames.', frames)
         checkpoint(frames)
         self.plogger.close()

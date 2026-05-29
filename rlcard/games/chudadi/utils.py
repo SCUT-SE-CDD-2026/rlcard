@@ -19,12 +19,12 @@ ID_TO_CARD = []
 for suit_index, suit in enumerate(DECK_SUIT_ORDER):
     for rank_index, rank in enumerate(DECK_RANK_ORDER):
         card = Card(suit, rank)
-        card_id = suit_index * len(DECK_RANK_ORDER) + rank_index
-        CARD_ID[(suit, rank)] = card_id
+        CARD_ID[(suit, rank)] = suit_index * len(DECK_RANK_ORDER) + rank_index
         ID_TO_CARD.append(card)
 
 START_CARD = Card("D", "3")
 
+# Production Android supports exactly eight non-pass combination types.
 ACTION_TYPES = [
     "single",
     "pair",
@@ -32,11 +32,21 @@ ACTION_TYPES = [
     "straight",
     "flush",
     "full_house",
-    "four_of_a_kind",  # 4+1, 铁支, 普通牌型
+    "four_of_a_kind",  # 4+1, 铁支
     "straight_flush",
-    "bomb",  # 4张裸出, 炸弹（北方规则：有条件使用）
 ]
 
+FIVE_CARD_TYPE_POWER = {
+    "straight": 1,
+    "flush": 2,
+    "full_house": 3,
+    "four_of_a_kind": 4,
+    "straight_flush": 5,
+}
+BOMB_POWER = {
+    "four_of_a_kind": 1,
+    "straight_flush": 2,
+}
 ACTION_TYPE_PRIORITY = {name: idx for idx, name in enumerate(ACTION_TYPES)}
 MASK_INDICES_CACHE = {}
 
@@ -92,9 +102,7 @@ class Action:
         return cards_to_action_id(self.cards)
 
 
-PASS_ACTION = Action(
-    cards=tuple(), action_type="pass", length=0, key=tuple(), raw="pass"
-)
+PASS_ACTION = Action(cards=tuple(), action_type="pass", length=0, key=tuple(), raw="pass")
 
 
 def _is_straight(ranks):
@@ -111,114 +119,79 @@ def _get_max_card(cards):
     return max(cards, key=card_key)
 
 
+def _rank_counts(cards):
+    counts = {}
+    for card in cards:
+        counts[card.rank] = counts.get(card.rank, 0) + 1
+    return counts
+
+
 def make_action(cards):
     if not cards:
         return None
     cards = sort_cards(cards)
+    if len({(card.suit, card.rank) for card in cards}) != len(cards):
+        return None
+
     length = len(cards)
     ranks = [card.rank for card in cards]
     suits = [card.suit for card in cards]
-    rank_counts = {}
-    for rank in ranks:
-        rank_counts[rank] = rank_counts.get(rank, 0) + 1
+    rank_counts = _rank_counts(cards)
     unique_ranks = len(rank_counts)
     is_flush = all(suit == suits[0] for suit in suits)
-    is_straight = _is_straight(ranks) if length >= 5 else False
+    is_straight = _is_straight(ranks) if length == 5 else False
 
     if length == 1:
         max_card = cards[-1]
-        return Action(
-            tuple(cards),
-            "single",
-            length,
-            card_key(max_card),
-            cards_to_str(cards, assume_sorted=True),
-        )
+        return Action(tuple(cards), "single", length, card_key(max_card), cards_to_str(cards, True))
 
     if length == 2 and unique_ranks == 1:
         rank_value = RANK_TO_VALUE[ranks[0]]
         max_suit = SUIT_TO_VALUE[cards[-1].suit]
-        return Action(
-            tuple(cards),
-            "pair",
-            length,
-            (rank_value, max_suit),
-            cards_to_str(cards, assume_sorted=True),
-        )
+        return Action(tuple(cards), "pair", length, (rank_value, max_suit), cards_to_str(cards, True))
 
     if length == 3 and unique_ranks == 1:
         rank_value = RANK_TO_VALUE[ranks[0]]
         max_suit = SUIT_TO_VALUE[cards[-1].suit]
+        return Action(tuple(cards), "triple", length, (rank_value, max_suit), cards_to_str(cards, True))
+
+    # Production rules do not allow a naked four-card bomb.
+    if length != 5:
+        return None
+
+    if is_flush and is_straight:
+        max_card = cards[-1]
+        return Action(tuple(cards), "straight_flush", length, card_key(max_card), cards_to_str(cards, True))
+
+    if sorted(rank_counts.values()) == [1, 4]:
+        quad_rank = next(rank for rank, count in rank_counts.items() if count == 4)
+        quad_suit = max(SUIT_TO_VALUE[card.suit] for card in cards if card.rank == quad_rank)
         return Action(
             tuple(cards),
-            "triple",
+            "four_of_a_kind",
             length,
-            (rank_value, max_suit),
-            cards_to_str(cards, assume_sorted=True),
+            (RANK_TO_VALUE[quad_rank], quad_suit),
+            cards_to_str(cards, True),
         )
 
-    # Bomb: 4 cards with same rank (Northern rule: conditional use)
-    if length == 4 and unique_ranks == 1:
-        rank_value = RANK_TO_VALUE[ranks[0]]
-        max_suit = SUIT_TO_VALUE[cards[-1].suit]
+    if sorted(rank_counts.values()) == [2, 3]:
+        triple_rank = next(rank for rank, count in rank_counts.items() if count == 3)
+        triple_suit = max(SUIT_TO_VALUE[card.suit] for card in cards if card.rank == triple_rank)
         return Action(
             tuple(cards),
-            "bomb",
+            "full_house",
             length,
-            (rank_value, max_suit),
-            cards_to_str(cards, assume_sorted=True),
+            (RANK_TO_VALUE[triple_rank], triple_suit),
+            cards_to_str(cards, True),
         )
 
-    if length == 5:
-        if is_straight and is_flush:
-            max_card = cards[-1]
-            return Action(
-                tuple(cards),
-                "straight_flush",
-                length,
-                card_key(max_card),
-                cards_to_str(cards, assume_sorted=True),
-            )
+    if is_flush:
+        max_card = cards[-1]
+        return Action(tuple(cards), "flush", length, card_key(max_card), cards_to_str(cards, True))
 
-        if length == 5 and sorted(rank_counts.values()) == [2, 3]:
-            triple_rank = [rank for rank, count in rank_counts.items() if count == 3][0]
-            return Action(
-                tuple(cards),
-                "full_house",
-                length,
-                (RANK_TO_VALUE[triple_rank],),
-                cards_to_str(cards, assume_sorted=True),
-            )
-
-        if length == 5 and sorted(rank_counts.values()) == [1, 4]:
-            quad_rank = [rank for rank, count in rank_counts.items() if count == 4][0]
-            return Action(
-                tuple(cards),
-                "four_of_a_kind",
-                length,
-                (RANK_TO_VALUE[quad_rank],),
-                cards_to_str(cards, assume_sorted=True),
-            )
-
-        if is_straight:
-            max_card = cards[-1]
-            return Action(
-                tuple(cards),
-                "straight",
-                length,
-                card_key(max_card),
-                cards_to_str(cards, assume_sorted=True),
-            )
-
-        if is_flush:
-            max_card = cards[-1]
-            return Action(
-                tuple(cards),
-                "flush",
-                length,
-                card_key(max_card),
-                cards_to_str(cards, assume_sorted=True),
-            )
+    if is_straight:
+        max_card = cards[-1]
+        return Action(tuple(cards), "straight", length, card_key(max_card), cards_to_str(cards, True))
 
     return None
 
@@ -242,18 +215,14 @@ def action_to_feature_meta(cards):
         if len(action.cards) >= 2:
             kicker_rank = action.cards[-2].rank
     elif action_type == "full_house":
-        rank_counts = {}
-        for card in action.cards:
-            rank_counts[card.rank] = rank_counts.get(card.rank, 0) + 1
+        rank_counts = _rank_counts(action.cards)
         for rank, count in rank_counts.items():
             if count == 3:
                 main_rank = rank
             elif count == 2:
                 kicker_rank = rank
     elif action_type == "four_of_a_kind":
-        rank_counts = {}
-        for card in action.cards:
-            rank_counts[card.rank] = rank_counts.get(card.rank, 0) + 1
+        rank_counts = _rank_counts(action.cards)
         for rank, count in rank_counts.items():
             if count == 4:
                 main_rank = rank
@@ -265,15 +234,38 @@ def action_to_feature_meta(cards):
     return action_type, main_index, kicker_index
 
 
-def can_beat(action, last_action):
+def _compare_same_type(action, last_action):
+    return action.key > last_action.key
+
+
+def _can_beat_northern(action, last_action):
+    if action.length != last_action.length:
+        return False
+    if action.action_type == last_action.action_type:
+        return _compare_same_type(action, last_action)
+    if action.length == 5:
+        return FIVE_CARD_TYPE_POWER[action.action_type] > FIVE_CARD_TYPE_POWER[last_action.action_type]
+    return False
+
+
+def _can_beat_southern(action, last_action):
+    action_is_bomb = action.action_type in BOMB_POWER
+    last_is_bomb = last_action.action_type in BOMB_POWER
+    if action_is_bomb or last_is_bomb:
+        if action_is_bomb and last_is_bomb:
+            return BOMB_POWER[action.action_type] > BOMB_POWER[last_action.action_type]
+        return action_is_bomb
+    if action.length != last_action.length or action.action_type != last_action.action_type:
+        return False
+    return _compare_same_type(action, last_action)
+
+
+def can_beat(action, last_action, northern_rule=True):
     if last_action is None:
         return True
-    if action.action_type != last_action.action_type:
-        return False
-    if action.action_type in ("straight", "flush", "straight_flush"):
-        if action.length != last_action.length:
-            return False
-    return action.key > last_action.key
+    if northern_rule:
+        return _can_beat_northern(action, last_action)
+    return _can_beat_southern(action, last_action)
 
 
 def _get_mask_indices(num_cards):
@@ -298,69 +290,7 @@ def _generate_valid_actions(hand):
     for mask in range(1, 1 << num_cards):
         indices = mask_indices[mask]
         length = len(indices)
-        if length == 1:
-            card = cards[indices[0]]
-            actions.append(Action((card,), "single", 1, card_key(card), str(card)))
-            continue
-        if length == 2:
-            card1 = cards[indices[0]]
-            card2 = cards[indices[1]]
-            if card1.rank != card2.rank:
-                continue
-            max_suit = SUIT_TO_VALUE[card2.suit]
-            rank_value = RANK_TO_VALUE[card1.rank]
-            actions.append(
-                Action(
-                    (card1, card2),
-                    "pair",
-                    2,
-                    (rank_value, max_suit),
-                    cards_to_str((card1, card2), assume_sorted=True),
-                )
-            )
-            continue
-        if length == 3:
-            card1 = cards[indices[0]]
-            card2 = cards[indices[1]]
-            card3 = cards[indices[2]]
-            if card1.rank != card2.rank or card2.rank != card3.rank:
-                continue
-            max_suit = SUIT_TO_VALUE[card3.suit]
-            rank_value = RANK_TO_VALUE[card1.rank]
-            actions.append(
-                Action(
-                    (card1, card2, card3),
-                    "triple",
-                    3,
-                    (rank_value, max_suit),
-                    cards_to_str((card1, card2, card3), assume_sorted=True),
-                )
-            )
-            continue
-        if length == 4:
-            # Check for bomb (4 cards with same rank)
-            card1, card2, card3, card4 = (
-                cards[indices[0]],
-                cards[indices[1]],
-                cards[indices[2]],
-                cards[indices[3]],
-            )
-            if card1.rank == card2.rank == card3.rank == card4.rank:
-                rank_value = RANK_TO_VALUE[card1.rank]
-                max_suit = SUIT_TO_VALUE[card4.suit]
-                actions.append(
-                    Action(
-                        (card1, card2, card3, card4),
-                        "bomb",
-                        4,
-                        (rank_value, max_suit),
-                        cards_to_str((card1, card2, card3, card4), assume_sorted=True),
-                    )
-                )
-            continue
-        if length < 5:
-            continue
-        if length > 5:
+        if length not in (1, 2, 3, 5):
             continue
         subset = [cards[i] for i in indices]
         action = make_action(subset)
@@ -370,77 +300,19 @@ def _generate_valid_actions(hand):
 
 
 def get_legal_actions(hand, last_action, must_contain_card=False, northern_rule=True):
-    """Get legal actions for the player.
-    Args:
-        hand: Player's current hand
-        last_action: The last action played
-        must_contain_card: Whether the action must contain the start card (D3)
-        northern_rule: If True, apply northern rule (must play if can beat same type)
-    Returns:
-        List of legal Action objects
-    """
+    """Return production-rule legal actions for the current hand."""
     actions = _generate_valid_actions(hand)
     if must_contain_card:
         actions = [action for action in actions if START_CARD in action.cards]
 
     if last_action is not None:
         beatable_actions = [
-            action for action in actions if can_beat(action, last_action)
+            action for action in actions if can_beat(action, last_action, northern_rule)
         ]
-        bomb_actions = [action for action in actions if action.action_type == "bomb"]
-
         if northern_rule:
-            # Northern rule: bomb can only be used when no same type can beat
-            has_same_type_beat = any(
-                action.action_type == last_action.action_type
-                for action in beatable_actions
-            )
-
-            if has_same_type_beat:
-                # Must play same type, cannot use bomb
-                valid_actions = [
-                    action
-                    for action in beatable_actions
-                    if action.action_type == last_action.action_type
-                ]
-            else:
-                # No same type can beat, can use bomb (under conditions)
-                valid_bombs = []
-                for bomb in bomb_actions:
-                    if last_action.action_type == "bomb":
-                        # Bomb vs bomb: compare rank
-                        if bomb.key > last_action.key:
-                            valid_bombs.append(bomb)
-                    elif last_action.action_type == "straight_flush":
-                        # Northern rule: straight_flush > bomb
-                        pass  # Bomb cannot beat straight flush
-                    else:
-                        # Bomb can beat any non-bomb when no same type
-                        valid_bombs.append(bomb)
-                # Also include same-type actions even if they can't beat
-                # (but in this case, there should be none)
-                valid_actions = valid_bombs
-
-            if valid_actions:
-                actions = valid_actions
-            else:
-                actions = [PASS_ACTION]
+            actions = beatable_actions if beatable_actions else [PASS_ACTION]
         else:
-            # Southern rule: bomb can beat anything
-            valid_bombs = []
-            for bomb in bomb_actions:
-                if last_action.action_type == "bomb":
-                    if bomb.key > last_action.key:
-                        valid_bombs.append(bomb)
-                else:
-                    valid_bombs.append(bomb)
-            all_beatable = list(
-                dict.fromkeys(beatable_actions + valid_bombs)
-            )  # Remove duplicates
-            if all_beatable:
-                actions = all_beatable + [PASS_ACTION]
-            else:
-                actions = [PASS_ACTION]
+            actions = beatable_actions + [PASS_ACTION] if beatable_actions else [PASS_ACTION]
 
     actions.sort(
         key=lambda action: (
