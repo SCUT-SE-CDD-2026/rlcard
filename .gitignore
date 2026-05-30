@@ -11,9 +11,9 @@ __pycache__/
 htmlcov/
 sonar-project.properties
 .coverage*
+experiments/
 docs/rst
 docs/sphinx
-experiments/
 dist/
 rlcard/games/doudizhu/jsondata/
 rlcard/agents/gin_rummy_human_agent/gui_cards/cards_png

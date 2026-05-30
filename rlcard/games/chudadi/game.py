@@ -32,7 +32,7 @@ class ChuDaDiGame:
             pass
 
         player = self.players[self.round.current_player]
-        self.round.proceed_round(player, action)
+        self.round.proceed_round(player, action, self.players)
 
         if len(player.current_hand) == 0:
             self.winner_id = player.player_id
@@ -78,6 +78,9 @@ class ChuDaDiGame:
             "last_player": self.round.last_player,
             "is_first_trick": self.round.is_first_trick,
             "played_cards": [list(p.played_cards) for p in self.players],
+            "played_action_history": [list(history) for history in self.round.played_action_history],
+            "baopei_player": self.round.baopei_player,
+            "winning_action": list(self.round.winning_action.cards) if self.round.winning_action is not None else [],
             "actions": action_ids,
             "raw_legal_actions": raw_actions,
             "trace": list(self.round.trace),
@@ -86,7 +89,13 @@ class ChuDaDiGame:
         return state
 
     def get_payoffs(self):
-        return self.judger.judge_payoffs(self.players, self.winner_id, self.northern_rule)
+        return self.judger.judge_payoffs(
+            self.players,
+            self.winner_id,
+            self.northern_rule,
+            self.round.baopei_player,
+            self.round.winning_action,
+        )
 
     def get_player_id(self):
         return self.round.current_player

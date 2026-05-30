@@ -5,6 +5,7 @@ import onnxruntime as ort
 import rlcard
 import torch
 from rlcard.utils import get_device, set_seed
+from rlcard.games.chudadi.utils import card_to_id
 
 
 class OnnxDmcAgent:
@@ -15,8 +16,13 @@ class OnnxDmcAgent:
             providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         self.session = ort.InferenceSession(onnx_path, providers=providers)
         self.input_names = [inp.name for inp in self.session.get_inputs()]
+        self.obs_dim = self._dim_or_none(self.session.get_inputs()[0].shape[-1])
         self.use_raw = False
         print(f"ONNX providers for {onnx_path}: {self.session.get_providers()}")
+
+    @staticmethod
+    def _dim_or_none(value):
+        return int(value) if isinstance(value, int) else None
 
     def step(self, state):
         return self.eval_step(state)[0]
@@ -25,23 +31,37 @@ class OnnxDmcAgent:
         legal_actions = state["legal_actions"]
         action_keys = list(legal_actions.keys())
         action_values = np.asarray(list(legal_actions.values()), dtype=np.float32)
-        obs = np.repeat(
-            np.asarray(state["obs"], dtype=np.float32)[None, :],
-            len(action_keys),
-            axis=0,
-        )
-        outputs = self.session.run(
-            None,
-            {
-                self.input_names[0]: obs,
-                self.input_names[1]: action_values,
-            },
-        )
+        base_obs = self._legacy_obs(state) if self.obs_dim == 334 and state["obs"].shape[0] != 334 else state["obs"]
+        obs = np.repeat(np.asarray(base_obs, dtype=np.float32)[None, :], len(action_keys), axis=0)
+        feeds = {self.input_names[0]: obs, self.input_names[1]: action_values}
+        if len(self.input_names) >= 3:
+            history = np.repeat(
+                np.asarray(state["history"], dtype=np.float32)[None, :],
+                len(action_keys),
+                axis=0,
+            )
+            feeds[self.input_names[2]] = history
+        outputs = self.session.run(None, feeds)
         values = np.asarray(outputs[0]).reshape(-1)
         action = action_keys[int(np.argmax(values))]
         info = {"values": {k: float(v) for k, v in zip(action_keys, values)}}
         return action, info
 
+    def _cards_to_array(self, cards):
+        array = np.zeros(52, dtype=np.int8)
+        for card in cards:
+            array[card_to_id(card)] = 1
+        return array
+
+    def _legacy_obs(self, state):
+        raw = state["raw_obs"]
+        player_id = raw["current_player"]
+        obs = state["obs"]
+        cumulative_history = []
+        for offset in (1, 2, 3):
+            relative_id = (player_id + offset) % 4
+            cumulative_history.append(self._cards_to_array(raw["played_cards"][relative_id]))
+        return np.concatenate([obs[:172], *cumulative_history, obs[172:]])
 
 def load_torch_agent(path, device):
     agent = torch.load(path, map_location=device, weights_only=False)
@@ -80,18 +100,24 @@ def main():
     parser.add_argument("--num-games", type=int, default=500)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rule", choices=["northern", "southern"], default="northern")
+    parser.add_argument("--history-len", type=int, default=13)
     parser.add_argument(
         "--mode",
         choices=["vs_torch", "two_vs_two"],
         default="vs_torch",
-        help="Compare each ONNX against fixed torch opponents, or let the two ONNX models occupy two seats each",
+        help="Compare each ONNX against fixed torch opponents, or let two ONNX models occupy two seats each",
     )
     args = parser.parse_args()
 
     set_seed(args.seed)
     device = get_device()
     env = rlcard.make(
-        "chudadi", config={"seed": args.seed, "northern_rule": args.rule == "northern"}
+        "chudadi",
+        config={
+            "seed": args.seed,
+            "northern_rule": args.rule == "northern",
+            "history_len": args.history_len,
+        },
     )
 
     model_a = OnnxDmcAgent(args.model_a)
@@ -115,20 +141,10 @@ def main():
         print("result_b", result_b)
         print("seat0_delta_b_minus_a", result_b[0] - result_a[0])
     else:
-        matchup_abab = evaluate_match(
-            env, [model_a, model_b, model_a, model_b], args.num_games
-        )
-        matchup_baba = evaluate_match(
-            env, [model_b, model_a, model_b, model_a], args.num_games
-        )
-
-        model_a_avg = (
-            matchup_abab[0] + matchup_abab[2] + matchup_baba[1] + matchup_baba[3]
-        ) / 4.0
-        model_b_avg = (
-            matchup_abab[1] + matchup_abab[3] + matchup_baba[0] + matchup_baba[2]
-        ) / 4.0
-
+        matchup_abab = evaluate_match(env, [model_a, model_b, model_a, model_b], args.num_games)
+        matchup_baba = evaluate_match(env, [model_b, model_a, model_b, model_a], args.num_games)
+        model_a_avg = (matchup_abab[0] + matchup_abab[2] + matchup_baba[1] + matchup_baba[3]) / 4.0
+        model_b_avg = (matchup_abab[1] + matchup_abab[3] + matchup_baba[0] + matchup_baba[2]) / 4.0
         print("matchup_abab", matchup_abab)
         print("matchup_baba", matchup_baba)
         print("model_a_avg", model_a_avg)

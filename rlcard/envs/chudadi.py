@@ -15,8 +15,8 @@ class ChudadiEnv(Env):
         from rlcard.games.chudadi import Game
 
         self.name = "chudadi"
-        # Northern rule is the default
         self.northern_rule = config.get("northern_rule", True)
+        self.history_len = int(config.get("history_len", 13))
         self.game = Game(northern_rule=self.northern_rule)
         super().__init__(config)
 
@@ -28,18 +28,16 @@ class ChudadiEnv(Env):
             "straight",
             "flush",
             "full_house",
-            "four_of_a_kind",  # 4+1 铁支
+            "four_of_a_kind",
             "straight_flush",
-            "bomb",  # 4张裸出 炸弹
         ]
-        self._action_type_to_index = {
-            name: idx for idx, name in enumerate(self._action_types)
-        }
+        self._action_type_to_index = {name: idx for idx, name in enumerate(self._action_types)}
         self._bit_positions = np.arange(52, dtype=np.uint64)
 
-        # 332 + 2 (triple + bomb type) + 1 (is_northern_rule flag) = 335
-        self.state_shape = [[335] for _ in range(self.num_players)]
-        self.action_shape = [[140] for _ in range(self.num_players)]
+        # V2 contract: non-history obs + action features + GRU history tensor.
+        self.state_shape = [[178] for _ in range(self.num_players)]
+        self.action_shape = [[139] for _ in range(self.num_players)]
+        self.history_shape = [[3, self.history_len, 52] for _ in range(self.num_players)]
 
     def _extract_state(self, state):
         player_id = state["current_player"]
@@ -68,10 +66,14 @@ class ChudadiEnv(Env):
         next_cards_left = self._get_relative_cards_left_one_hot(state, player_id, 1)
         across_cards_left = self._get_relative_cards_left_one_hot(state, player_id, 2)
         prev_cards_left = self._get_relative_cards_left_one_hot(state, player_id, 3)
-
-        history_next = self._get_relative_played_history(state, player_id, 1)
-        history_across = self._get_relative_played_history(state, player_id, 2)
-        history_prev = self._get_relative_played_history(state, player_id, 3)
+        history = np.stack(
+            [
+                self._get_relative_played_sequence_history(state, player_id, 1),
+                self._get_relative_played_sequence_history(state, player_id, 2),
+                self._get_relative_played_sequence_history(state, player_id, 3),
+            ],
+            axis=0,
+        )
 
         relative_pass_mask = self._get_relative_pass_mask(state, player_id)
         is_next_warning = (
@@ -79,7 +81,6 @@ class ChudadiEnv(Env):
             if state["num_cards_left"][self._relative_player_id(player_id, 1)] == 1
             else 0
         )
-
         is_northern_rule = 1 if self.northern_rule else 0
 
         obs = np.concatenate(
@@ -92,9 +93,6 @@ class ChudadiEnv(Env):
                 next_cards_left,
                 across_cards_left,
                 prev_cards_left,
-                history_next,
-                history_across,
-                history_prev,
                 np.asarray([is_leader], dtype=np.int8),
                 relative_pass_mask,
                 np.asarray([is_next_warning], dtype=np.int8),
@@ -105,6 +103,7 @@ class ChudadiEnv(Env):
         extracted_state = OrderedDict(
             {
                 "obs": obs,
+                "history": history,
                 "legal_actions": self._get_legal_actions(
                     current_hand=state["current_hand"],
                     action_ids=state["actions"],
@@ -134,16 +133,11 @@ class ChudadiEnv(Env):
             current_hand = self.game.state.get("current_hand", [])
         action_ids = np.asarray(legal_actions, dtype=np.uint64)
         features = self._action_ids_to_features(action_ids, current_hand)
-        return {
-            int(action_id): features[index]
-            for index, action_id in enumerate(action_ids)
-        }
+        return {int(action_id): features[index] for index, action_id in enumerate(action_ids)}
 
     def get_perfect_information(self):
         state = {}
-        state["hand_cards"] = [
-            cards_to_str(player.current_hand) for player in self.game.players
-        ]
+        state["hand_cards"] = [cards_to_str(player.current_hand) for player in self.game.players]
         state["trace"] = list(self.game.state["trace"])
         state["current_player"] = self.game.round.current_player
         state["legal_actions"] = list(self.game.state["raw_legal_actions"])
@@ -155,10 +149,7 @@ class ChudadiEnv(Env):
         else:
             raw_state = state.get("raw_obs", state)
             current_hand = raw_state.get("current_hand", [])
-        features = self._action_ids_to_features(
-            np.asarray([action], dtype=np.uint64),
-            current_hand,
-        )
+        features = self._action_ids_to_features(np.asarray([action], dtype=np.uint64), current_hand)
         if features.size == 0:
             return np.zeros(self.action_shape[0], dtype=np.int8)
         return features[0]
@@ -180,9 +171,16 @@ class ChudadiEnv(Env):
             one_hot[count] = 1
         return one_hot
 
-    def _get_relative_played_history(self, state, player_id, offset):
+    def _get_relative_played_sequence_history(self, state, player_id, offset):
         relative_id = self._relative_player_id(player_id, offset)
-        return self._cards_to_array(state["played_cards"][relative_id])
+        history = np.zeros((self.history_len, 52), dtype=np.int8)
+        raw_history = state.get("played_action_history", [[] for _ in range(self.num_players)])
+        actions = raw_history[relative_id] if relative_id < len(raw_history) else []
+        actions = actions[-self.history_len :]
+        start = self.history_len - len(actions)
+        for row, cards in enumerate(actions, start=start):
+            history[row] = self._cards_to_array(cards)
+        return history
 
     def _get_relative_pass_mask(self, state, player_id):
         mask = np.zeros(3, dtype=np.int8)
@@ -198,9 +196,7 @@ class ChudadiEnv(Env):
                 break
         if last_non_pass_idx is None:
             return mask
-        passed_players = {
-            pid for pid, action in trace[last_non_pass_idx + 1 :] if action == "pass"
-        }
+        passed_players = {pid for pid, action in trace[last_non_pass_idx + 1 :] if action == "pass"}
         for rel_index, offset in enumerate((1, 2, 3)):
             if self._relative_player_id(player_id, offset) in passed_players:
                 mask[rel_index] = 1
@@ -215,12 +211,8 @@ class ChudadiEnv(Env):
             if current_hand is not None
             else np.zeros(52, dtype=np.int8)
         )
-        next_hand_bits = np.clip(
-            current_hand_bits[np.newaxis, :] - action_bits, 0, 1
-        ).astype(np.int8)
-        action_type_features = np.zeros(
-            (len(action_ids), len(self._action_types)), dtype=np.int8
-        )
+        next_hand_bits = np.clip(current_hand_bits[np.newaxis, :] - action_bits, 0, 1).astype(np.int8)
+        action_type_features = np.zeros((len(action_ids), len(self._action_types)), dtype=np.int8)
         action_main_rank = np.zeros((len(action_ids), 13), dtype=np.int8)
         action_kicker_rank = np.zeros((len(action_ids), 13), dtype=np.int8)
         for index, action_id in enumerate(action_ids):
@@ -236,18 +228,11 @@ class ChudadiEnv(Env):
             if kicker_idx is not None:
                 action_kicker_rank[index, kicker_idx] = 1
         return np.concatenate(
-            [
-                action_bits,
-                next_hand_bits,
-                action_type_features,
-                action_main_rank,
-                action_kicker_rank,
-            ],
+            [action_bits, next_hand_bits, action_type_features, action_main_rank, action_kicker_rank],
             axis=1,
         )
 
     def _action_ids_to_arrays(self, action_ids):
         if action_ids.size == 0:
             return np.zeros((0, 52), dtype=np.int8)
-        bits = ((action_ids[:, None] >> self._bit_positions) & 1).astype(np.int8)
-        return bits
+        return ((action_ids[:, None] >> self._bit_positions) & 1).astype(np.int8)

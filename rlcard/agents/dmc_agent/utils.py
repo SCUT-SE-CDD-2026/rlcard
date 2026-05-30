@@ -80,10 +80,11 @@ def create_buffers(
     action_shape,
     device_iterator,
     pin_memory=False,
+    history_shape=None,
 ):
     devices = list(device_iterator)
     num_players = len(state_shape)
-    spec_count = 5
+    spec_count = 6 if history_shape is not None else 5
     per_buffer_objects = max(1, len(devices) * num_players * spec_count)
     num_buffers = _cap_num_buffers(num_buffers, per_buffer_objects)
     buffers = {}
@@ -97,6 +98,11 @@ def create_buffers(
                 state=dict(size=(T,) + tuple(state_shape[player_id]), dtype=torch.int8),
                 action=dict(size=(T,) + tuple(action_shape[player_id]), dtype=torch.int8),
             )
+            if history_shape is not None:
+                specs["history"] = dict(
+                    size=(T,) + tuple(history_shape[player_id]),
+                    dtype=torch.int8,
+                )
             _buffers = {key: [] for key in specs}
             use_pin_memory = pin_memory
             for _ in range(num_buffers):
@@ -160,6 +166,8 @@ def act(
         target_buf = [[] for _ in range(env.num_players)]
         state_buf = [[] for _ in range(env.num_players)]
         action_buf = [[] for _ in range(env.num_players)]
+        history_buf = [[] for _ in range(env.num_players)]
+        has_history = hasattr(env, "history_shape")
         size = [0 for _ in range(env.num_players)]
 
         while True:
@@ -180,6 +188,8 @@ def act(
                         action = env.get_action_feature(trajectories[p][i+1], state)
                         state_buf[p].append(torch.from_numpy(obs))
                         action_buf[p].append(torch.from_numpy(action))
+                        if has_history:
+                            history_buf[p].append(torch.from_numpy(state['history']))
                 
                 while size[p] > T:
                     index = free_queue[p].get()
@@ -191,12 +201,16 @@ def act(
                         buffers[p]['target'][index][t, ...] = target_buf[p][t]
                         buffers[p]['state'][index][t, ...] = state_buf[p][t]
                         buffers[p]['action'][index][t, ...] = action_buf[p][t]
+                        if has_history:
+                            buffers[p]['history'][index][t, ...] = history_buf[p][t]
                     full_queue[p].put(index)
                     done_buf[p] = done_buf[p][T:]
                     episode_return_buf[p] = episode_return_buf[p][T:]
                     target_buf[p] = target_buf[p][T:]
                     state_buf[p] = state_buf[p][T:]
                     action_buf[p] = action_buf[p][T:]
+                    if has_history:
+                        history_buf[p] = history_buf[p][T:]
                     size[p] -= T
 
     except KeyboardInterrupt:

@@ -2,7 +2,7 @@ import argparse
 
 import rlcard
 import torch
-from rlcard.utils import get_device
+from rlcard.utils import get_device, set_seed
 
 
 def load_agent(path, device):
@@ -29,12 +29,22 @@ def main():
     parser.add_argument("--opp1", required=True, help="Seat-1 opponent checkpoint")
     parser.add_argument("--opp2", required=True, help="Seat-2 opponent checkpoint")
     parser.add_argument("--opp3", required=True, help="Seat-3 opponent checkpoint")
-    parser.add_argument("--num_games", type=int, default=200)
+    parser.add_argument("--num-games", type=int, default=200)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--rule", choices=["northern", "southern"], default="northern")
+    parser.add_argument("--history-len", type=int, default=13)
     args = parser.parse_args()
 
+    set_seed(args.seed)
     device = get_device()
-    env = rlcard.make("chudadi", config={"seed": args.seed})
+    env = rlcard.make(
+        "chudadi",
+        config={
+            "seed": args.seed,
+            "northern_rule": args.rule == "northern",
+            "history_len": args.history_len,
+        },
+    )
 
     old_agent = load_agent(args.old, device)
     new_agent = load_agent(args.new, device)
