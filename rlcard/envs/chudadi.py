@@ -120,7 +120,7 @@ class ChudadiEnv(Env):
         payoffs = self.game.get_payoffs()
         if self.reward_mode == "win_loss_zero_sum":
             winner = int(np.argmax(payoffs))
-            return [1.0 if player_id == winner else -1.0 / 3.0 for player_id in range(self.num_players)]
+            return [1.3 if player_id == winner else -1.0 / 3.0 for player_id in range(self.num_players)]
         return payoffs
 
     def _decode_action(self, action_id):
