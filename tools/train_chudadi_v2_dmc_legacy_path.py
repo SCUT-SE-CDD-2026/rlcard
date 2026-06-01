@@ -72,6 +72,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epsilon", type=float, default=0.00001)
     parser.add_argument("--exp-epsilon", type=float, default=0.01)
     parser.add_argument(
+        "--reward-mode",
+        choices=("win_loss_zero_sum", "score"),
+        default="win_loss_zero_sum",
+        help="Training target. win_loss_zero_sum ignores score magnitude including baopei; score keeps raw game score.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print resolved config and exit without starting training.",
@@ -125,6 +131,7 @@ def build_env(args: argparse.Namespace):
         config={
             "northern_rule": args.rule == "northern",
             "history_len": args.history_len,
+            "reward_mode": args.reward_mode,
         },
     )
 
@@ -154,6 +161,8 @@ def config_snapshot(args: argparse.Namespace, total_frames: int, env: Any) -> di
         "momentum": args.momentum,
         "epsilon": args.epsilon,
         "exp_epsilon": args.exp_epsilon,
+        "reward_mode": args.reward_mode,
+        "training_ignores_baopei_score": args.reward_mode == "win_loss_zero_sum",
         "model_version": "v2",
         "state_shape": env.state_shape,
         "action_shape": env.action_shape,
