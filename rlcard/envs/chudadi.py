@@ -17,6 +17,7 @@ class ChudadiEnv(Env):
         self.name = "chudadi"
         self.northern_rule = config.get("northern_rule", True)
         self.history_len = int(config.get("history_len", 13))
+        self.reward_mode = config.get("reward_mode", "score")
         self.game = Game(northern_rule=self.northern_rule)
         super().__init__(config)
 
@@ -116,7 +117,11 @@ class ChudadiEnv(Env):
         return extracted_state
 
     def get_payoffs(self):
-        return self.game.get_payoffs()
+        payoffs = self.game.get_payoffs()
+        if self.reward_mode == "win_loss_zero_sum":
+            winner = int(np.argmax(payoffs))
+            return [1.0 if player_id == winner else -1.0 / 3.0 for player_id in range(self.num_players)]
+        return payoffs
 
     def _decode_action(self, action_id):
         if action_id == 0:
