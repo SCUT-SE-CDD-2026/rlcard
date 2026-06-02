@@ -26,6 +26,9 @@ class ChudadiEnv(Env):
         self.name = "chudadi"
         self.northern_rule = config.get("northern_rule", True)
         self.history_len = int(config.get("history_len", 13))
+        self.obs_version = config.get("obs_version", "v2")
+        if self.obs_version not in {"v2", "v3"}:
+            raise ValueError(f"Unsupported ChuDaDi obs_version: {self.obs_version}")
         self.reward_mode = config.get("reward_mode", self.REWARD_SCORE)
         if self.reward_mode not in {
             self.REWARD_SCORE,
@@ -33,7 +36,8 @@ class ChudadiEnv(Env):
             self.REWARD_STRATEGIC_WIN_ZERO_SUM,
         }:
             raise ValueError(f"Unsupported ChuDaDi reward mode: {self.reward_mode}")
-        self.game = Game(northern_rule=self.northern_rule)
+        self.enable_baopei = bool(config.get("enable_baopei", True))
+        self.game = Game(northern_rule=self.northern_rule, enable_baopei=self.enable_baopei)
         super().__init__(config)
 
         self._action_types = [
@@ -50,10 +54,12 @@ class ChudadiEnv(Env):
         self._action_type_to_index = {name: idx for idx, name in enumerate(self._action_types)}
         self._bit_positions = np.arange(52, dtype=np.uint64)
 
-        # V2 contract: non-history obs + action features + GRU history tensor.
-        self.state_shape = [[178] for _ in range(self.num_players)]
         self.action_shape = [[139] for _ in range(self.num_players)]
-        self.history_shape = [[3, self.history_len, 52] for _ in range(self.num_players)]
+        if self.obs_version == "v3":
+            self.state_shape = [[334] for _ in range(self.num_players)]
+        else:
+            self.state_shape = [[178] for _ in range(self.num_players)]
+            self.history_shape = [[3, self.history_len, 52] for _ in range(self.num_players)]
 
     def _extract_state(self, state):
         player_id = state["current_player"]
@@ -82,15 +88,6 @@ class ChudadiEnv(Env):
         next_cards_left = self._get_relative_cards_left_one_hot(state, player_id, 1)
         across_cards_left = self._get_relative_cards_left_one_hot(state, player_id, 2)
         prev_cards_left = self._get_relative_cards_left_one_hot(state, player_id, 3)
-        history = np.stack(
-            [
-                self._get_relative_played_sequence_history(state, player_id, 1),
-                self._get_relative_played_sequence_history(state, player_id, 2),
-                self._get_relative_played_sequence_history(state, player_id, 3),
-            ],
-            axis=0,
-        )
-
         relative_pass_mask = self._get_relative_pass_mask(state, player_id)
         is_next_warning = (
             1
@@ -99,32 +96,54 @@ class ChudadiEnv(Env):
         )
         is_northern_rule = 1 if self.northern_rule else 0
 
-        obs = np.concatenate(
-            [
-                current_hand,
-                last_action,
-                action_type_one_hot,
-                action_length_one_hot,
-                leader_relative_pos,
-                next_cards_left,
-                across_cards_left,
-                prev_cards_left,
-                np.asarray([is_leader], dtype=np.int8),
-                relative_pass_mask,
-                np.asarray([is_next_warning], dtype=np.int8),
-                np.asarray([is_northern_rule], dtype=np.int8),
-            ]
-        )
+        prefix = [
+            current_hand,
+            last_action,
+            action_type_one_hot,
+            action_length_one_hot,
+            leader_relative_pos,
+            next_cards_left,
+            across_cards_left,
+            prev_cards_left,
+        ]
+        suffix = [
+            np.asarray([is_leader], dtype=np.int8),
+            relative_pass_mask,
+            np.asarray([is_next_warning], dtype=np.int8),
+            np.asarray([is_northern_rule], dtype=np.int8),
+        ]
 
+        extracted_items = {
+            "legal_actions": self._get_legal_actions(
+                current_hand=state["current_hand"],
+                action_ids=state["actions"],
+            ),
+        }
+        if self.obs_version == "v3":
+            obs = np.concatenate(
+                prefix
+                + [
+                    self._get_relative_played_history(state, player_id, 1),
+                    self._get_relative_played_history(state, player_id, 2),
+                    self._get_relative_played_history(state, player_id, 3),
+                ]
+                + suffix
+            )
+        else:
+            history = np.stack(
+                [
+                    self._get_relative_played_sequence_history(state, player_id, 1),
+                    self._get_relative_played_sequence_history(state, player_id, 2),
+                    self._get_relative_played_sequence_history(state, player_id, 3),
+                ],
+                axis=0,
+            )
+            obs = np.concatenate(prefix + suffix)
+            extracted_items["history"] = history
+
+        extracted_items["obs"] = obs
         extracted_state = OrderedDict(
-            {
-                "obs": obs,
-                "history": history,
-                "legal_actions": self._get_legal_actions(
-                    current_hand=state["current_hand"],
-                    action_ids=state["actions"],
-                ),
-            }
+            (key, extracted_items[key]) for key in ("obs", "history", "legal_actions") if key in extracted_items
         )
         extracted_state["raw_obs"] = state
         extracted_state["raw_legal_actions"] = list(state["raw_legal_actions"])
@@ -271,6 +290,10 @@ class ChudadiEnv(Env):
         if 0 <= count < 14:
             one_hot[count] = 1
         return one_hot
+
+    def _get_relative_played_history(self, state, player_id, offset):
+        relative_id = self._relative_player_id(player_id, offset)
+        return self._cards_to_array(state["played_cards"][relative_id])
 
     def _get_relative_played_sequence_history(self, state, player_id, offset):
         relative_id = self._relative_player_id(player_id, offset)

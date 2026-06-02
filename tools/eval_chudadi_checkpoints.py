@@ -33,18 +33,19 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rule", choices=["northern", "southern"], default="northern")
     parser.add_argument("--history-len", type=int, default=13)
+    parser.add_argument("--model-version", choices=["v2", "v3"], default="v2")
     args = parser.parse_args()
 
     set_seed(args.seed)
     device = get_device()
-    env = rlcard.make(
-        "chudadi",
-        config={
-            "seed": args.seed,
-            "northern_rule": args.rule == "northern",
-            "history_len": args.history_len,
-        },
-    )
+    env_config = {
+        "seed": args.seed,
+        "northern_rule": args.rule == "northern",
+        "obs_version": args.model_version,
+    }
+    if args.model_version == "v2":
+        env_config["history_len"] = args.history_len
+    env = rlcard.make("chudadi", config=env_config)
 
     old_agent = load_agent(args.old, device)
     new_agent = load_agent(args.new, device)

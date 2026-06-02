@@ -88,6 +88,29 @@ class DMCNetV2(nn.Module):
         return self.fusion_head(x).flatten()
 
 
+class DMCNetV3(nn.Module):
+    """ChuDaDi V3 Q-network: V2 dual towers without recurrent history input."""
+
+    def __init__(
+        self,
+        state_shape,
+        action_shape,
+        state_layers=(512, 512),
+        action_layers=(512, 256),
+        fusion_layers=(512, 256),
+    ):
+        super().__init__()
+        self.state_tower = DMCNetV2._make_mlp(int(np.prod(state_shape)), state_layers)
+        self.action_tower = DMCNetV2._make_mlp(int(np.prod(action_shape)), action_layers)
+        fusion_input_dim = state_layers[-1] + action_layers[-1]
+        self.fusion_head = DMCNetV2._make_mlp(fusion_input_dim, fusion_layers, output_dim=1)
+
+    def forward(self, obs, actions):
+        obs = torch.flatten(obs, 1)
+        actions = torch.flatten(actions, 1)
+        x = torch.cat((self.state_tower(obs), self.action_tower(actions)), dim=1)
+        return self.fusion_head(x).flatten()
+
 class DMCAgent:
     def __init__(
         self,
@@ -107,6 +130,8 @@ class DMCAgent:
             if history_shape is None:
                 raise ValueError("history_shape is required for DMC model_version='v2'")
             self.net = DMCNetV2(state_shape, action_shape, history_shape).to(self.device)
+        elif model_version == "v3":
+            self.net = DMCNetV3(state_shape, action_shape).to(self.device)
         else:
             self.net = DMCNet(state_shape, action_shape, mlp_layers).to(self.device)
         self.exp_epsilon = exp_epsilon

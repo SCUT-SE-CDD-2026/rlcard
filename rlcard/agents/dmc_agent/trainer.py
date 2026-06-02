@@ -146,6 +146,8 @@ class DMCTrainer:
         epsilon=0.00001,
         model_version="v1",
         history_shape=None,
+        log_every_learns=1,
+        save_seat_checkpoints=True,
     ):
         self.env = env
 
@@ -178,6 +180,8 @@ class DMCTrainer:
         self.epsilon = epsilon
         self.model_version = model_version
         self.history_shape = history_shape
+        self.log_every_learns = max(1, int(log_every_learns))
+        self.save_seat_checkpoints = save_seat_checkpoints
 
         self.is_pettingzoo_env = is_pettingzoo_env
         if not self.is_pettingzoo_env:
@@ -283,7 +287,7 @@ class DMCTrainer:
             stat_keys.append('loss_'+str(p))
             if self.strategic_reward_metrics:
                 stat_keys.append('strategic_bonus_ratio_'+str(p))
-        frames, stats = 0, {k: 0 for k in stat_keys}
+        frames, learns, stats = 0, 0, {k: 0 for k in stat_keys}
 
         # Load models if any
         if self.load_model and os.path.exists(self.checkpointpath):
@@ -315,7 +319,7 @@ class DMCTrainer:
 
         def batch_and_learn(i, device, position, local_lock, position_lock, lock=threading.Lock()):
             """Thread target for the learning process."""
-            nonlocal frames, stats
+            nonlocal frames, learns, stats
             while frames < self.total_frames:
                 batch = get_batch(
                     free_queue[device][position],
@@ -340,9 +344,11 @@ class DMCTrainer:
                 with lock:
                     for k in _stats:
                         stats[k] = _stats[k]
-                    to_log = dict(frames=frames)
-                    to_log.update({k: stats[k] for k in stat_keys})
-                    self.plogger.log(to_log)
+                    learns += 1
+                    if learns % self.log_every_learns == 0:
+                        to_log = dict(frames=frames)
+                        to_log.update({k: stats[k] for k in stat_keys})
+                        self.plogger.log(to_log)
                     frames += self.T * self.B
 
         for device in self.device_iterator:
@@ -382,16 +388,19 @@ class DMCTrainer:
                 'state_shape': self.env.state_shape,
                 'action_shape': self.action_shape,
                 'history_shape': self.history_shape,
+                'log_every_learns': self.log_every_learns,
+                'save_seat_checkpoints': self.save_seat_checkpoints,
             }, self.checkpointpath)
 
-            # Save the weights for evaluation purpose
-            for position in range(self.num_players):
-                model_weights_dir = os.path.expandvars(os.path.expanduser(
-                    '%s/%s/%s' % (self.savedir, self.xpid, str(position)+'_'+str(frames)+'.pth')))
-                torch.save(
-                    learner_model.get_agent(position),
-                    model_weights_dir
-                )
+            if self.save_seat_checkpoints:
+                # Save the weights for evaluation purpose
+                for position in range(self.num_players):
+                    model_weights_dir = os.path.expandvars(os.path.expanduser(
+                        '%s/%s/%s' % (self.savedir, self.xpid, str(position)+'_'+str(frames)+'.pth')))
+                    torch.save(
+                        learner_model.get_agent(position),
+                        model_weights_dir
+                    )
 
         timer = timeit.default_timer
         try:

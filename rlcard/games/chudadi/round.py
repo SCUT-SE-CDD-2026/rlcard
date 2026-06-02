@@ -2,10 +2,11 @@ from rlcard.games.chudadi.utils import START_CARD, card_key, can_beat, make_acti
 
 
 class ChuDaDiRound:
-    def __init__(self, np_random, num_players, northern_rule=True):
+    def __init__(self, np_random, num_players, northern_rule=True, enable_baopei=True):
         self.np_random = np_random
         self.num_players = num_players
         self.northern_rule = northern_rule
+        self.enable_baopei = enable_baopei
         self.current_player = 0
         self.starting_player = 0
         self.last_action = None
@@ -50,7 +51,7 @@ class ChuDaDiRound:
         if action_obj is None:
             raise ValueError(f"Invalid ChuDaDi action: {action}")
 
-        if players is not None:
+        if self.enable_baopei and players is not None:
             self._check_baopei(players, player.player_id, action_obj)
 
         self.trace.append((player.player_id, action_obj.raw))

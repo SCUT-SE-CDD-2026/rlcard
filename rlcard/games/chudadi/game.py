@@ -7,9 +7,10 @@ from rlcard.games.chudadi.round import ChuDaDiRound as Round
 
 
 class ChuDaDiGame:
-    def __init__(self, allow_step_back=False, northern_rule=True):
+    def __init__(self, allow_step_back=False, northern_rule=True, enable_baopei=True):
         self.allow_step_back = allow_step_back
         self.northern_rule = northern_rule
+        self.enable_baopei = enable_baopei
         self.np_random = np.random.RandomState()
         self.num_players = 4
         self.state = None
@@ -20,7 +21,7 @@ class ChuDaDiGame:
         self.history = []
         self.players = [Player(player_id) for player_id in range(self.num_players)]
         self.dealer = Dealer(self.np_random)
-        self.round = Round(self.np_random, self.num_players, self.northern_rule)
+        self.round = Round(self.np_random, self.num_players, self.northern_rule, self.enable_baopei)
         self.round.initiate(self.players, self.dealer)
         self.judger = Judger(self.np_random, self.northern_rule)
         player_id = self.round.current_player

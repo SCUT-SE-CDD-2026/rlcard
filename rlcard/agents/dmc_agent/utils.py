@@ -175,7 +175,7 @@ def act(
         history_buf = [[] for _ in range(env.num_players)]
         strategic_bonus_ratio_buf = [[] for _ in range(env.num_players)]
         strategic_win_buf = [[] for _ in range(env.num_players)]
-        has_history = hasattr(env, "history_shape")
+        has_history = bool(buffers) and "history" in buffers[0]
         has_strategic_reward_metrics = getattr(env, "reward_mode", None) == "strategic_win_zero_sum"
         size = [0 for _ in range(env.num_players)]
 

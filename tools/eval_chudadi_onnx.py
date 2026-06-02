@@ -102,6 +102,12 @@ def main():
     parser.add_argument("--rule", choices=["northern", "southern"], default="northern")
     parser.add_argument("--history-len", type=int, default=13)
     parser.add_argument(
+        "--model-version",
+        choices=["auto", "v2", "v3"],
+        default="auto",
+        help="Use v3 to evaluate two-input 334-dim ONNX models against V3-compatible opponents.",
+    )
+    parser.add_argument(
         "--mode",
         choices=["vs_torch", "two_vs_two"],
         default="vs_torch",
@@ -111,14 +117,15 @@ def main():
 
     set_seed(args.seed)
     device = get_device()
-    env = rlcard.make(
-        "chudadi",
-        config={
-            "seed": args.seed,
-            "northern_rule": args.rule == "northern",
-            "history_len": args.history_len,
-        },
-    )
+    obs_version = "v3" if args.model_version == "v3" else "v2"
+    env_config = {
+        "seed": args.seed,
+        "northern_rule": args.rule == "northern",
+        "obs_version": obs_version,
+    }
+    if obs_version == "v2":
+        env_config["history_len"] = args.history_len
+    env = rlcard.make("chudadi", config=env_config)
 
     model_a = OnnxDmcAgent(args.model_a)
     model_b = OnnxDmcAgent(args.model_b)
@@ -127,6 +134,8 @@ def main():
     print("model_b", args.model_b)
     print("num_games", args.num_games)
     print("rule", args.rule)
+    print("model_version", args.model_version)
+    print("obs_version", obs_version)
 
     if args.mode == "vs_torch":
         opponents = [
