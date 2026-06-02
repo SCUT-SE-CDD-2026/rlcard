@@ -167,6 +167,7 @@ def config_snapshot(args: argparse.Namespace, total_frames: int, env: Any) -> di
         "reward_mode": args.reward_mode,
         "training_ignores_baopei_score": args.reward_mode in {"strategic_win_zero_sum", "win_loss_zero_sum"},
         "strategic_reward": args.reward_mode == "strategic_win_zero_sum",
+        "strategic_bonus_log_metric": "strategic_bonus_ratio_<seat>" if args.reward_mode == "strategic_win_zero_sum" else None,
         "model_version": "v2",
         "state_shape": env.state_shape,
         "action_shape": env.action_shape,

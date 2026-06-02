@@ -81,10 +81,13 @@ def create_buffers(
     device_iterator,
     pin_memory=False,
     history_shape=None,
+    strategic_reward_metrics=False,
 ):
     devices = list(device_iterator)
     num_players = len(state_shape)
     spec_count = 6 if history_shape is not None else 5
+    if strategic_reward_metrics:
+        spec_count += 2
     per_buffer_objects = max(1, len(devices) * num_players * spec_count)
     num_buffers = _cap_num_buffers(num_buffers, per_buffer_objects)
     buffers = {}
@@ -98,6 +101,9 @@ def create_buffers(
                 state=dict(size=(T,) + tuple(state_shape[player_id]), dtype=torch.int8),
                 action=dict(size=(T,) + tuple(action_shape[player_id]), dtype=torch.int8),
             )
+            if strategic_reward_metrics:
+                specs["strategic_bonus_ratio"] = dict(size=(T,), dtype=torch.float32)
+                specs["strategic_win"] = dict(size=(T,), dtype=torch.float32)
             if history_shape is not None:
                 specs["history"] = dict(
                     size=(T,) + tuple(history_shape[player_id]),
@@ -167,11 +173,15 @@ def act(
         state_buf = [[] for _ in range(env.num_players)]
         action_buf = [[] for _ in range(env.num_players)]
         history_buf = [[] for _ in range(env.num_players)]
+        strategic_bonus_ratio_buf = [[] for _ in range(env.num_players)]
+        strategic_win_buf = [[] for _ in range(env.num_players)]
         has_history = hasattr(env, "history_shape")
+        has_strategic_reward_metrics = getattr(env, "reward_mode", None) == "strategic_win_zero_sum"
         size = [0 for _ in range(env.num_players)]
 
         while True:
             trajectories, payoffs = env.run(is_training=True)
+            reward_info = env.get_reward_info() if has_strategic_reward_metrics else None
             for p in range(env.num_players):
                 size[p] += len(trajectories[p][:-1]) // 2
                 diff = size[p] - len(target_buf[p])
@@ -181,6 +191,13 @@ def act(
                     episode_return_buf[p].extend([0.0 for _ in range(diff-1)])
                     episode_return_buf[p].append(float(payoffs[p]))
                     target_buf[p].extend([float(payoffs[p]) for _ in range(diff)])
+                    if has_strategic_reward_metrics:
+                        is_winner = reward_info["winner"] == p
+                        bonus_ratio = reward_info["strategic_bonus_ratio"] if is_winner else 0.0
+                        strategic_win_buf[p].extend([0.0 for _ in range(diff-1)])
+                        strategic_win_buf[p].append(1.0 if is_winner else 0.0)
+                        strategic_bonus_ratio_buf[p].extend([0.0 for _ in range(diff-1)])
+                        strategic_bonus_ratio_buf[p].append(float(bonus_ratio))
                     # State and action
                     for i in range(0, len(trajectories[p])-2, 2):
                         state = trajectories[p][i]
@@ -203,6 +220,9 @@ def act(
                         buffers[p]['action'][index][t, ...] = action_buf[p][t]
                         if has_history:
                             buffers[p]['history'][index][t, ...] = history_buf[p][t]
+                        if has_strategic_reward_metrics:
+                            buffers[p]['strategic_bonus_ratio'][index][t, ...] = strategic_bonus_ratio_buf[p][t]
+                            buffers[p]['strategic_win'][index][t, ...] = strategic_win_buf[p][t]
                     full_queue[p].put(index)
                     done_buf[p] = done_buf[p][T:]
                     episode_return_buf[p] = episode_return_buf[p][T:]
@@ -211,6 +231,9 @@ def act(
                     action_buf[p] = action_buf[p][T:]
                     if has_history:
                         history_buf[p] = history_buf[p][T:]
+                    if has_strategic_reward_metrics:
+                        strategic_bonus_ratio_buf[p] = strategic_bonus_ratio_buf[p][T:]
+                        strategic_win_buf[p] = strategic_win_buf[p][T:]
                     size[p] -= T
 
     except KeyboardInterrupt:

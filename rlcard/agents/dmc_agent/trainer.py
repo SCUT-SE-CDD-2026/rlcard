@@ -52,6 +52,7 @@ def learn(
     training_device,
     max_grad_norm,
     mean_episode_return_buf,
+    strategic_bonus_ratio_buf,
     lock
 ):
     """Performs a learning (optimization) step."""
@@ -72,6 +73,18 @@ def learn(
             'mean_episode_return_'+str(position): torch.mean(torch.stack([_r for _r in mean_episode_return_buf[position]])).item(),
             'loss_'+str(position): loss.item(),
         }
+        if 'strategic_bonus_ratio' in batch:
+            done = batch['done']
+            wins = batch['strategic_win'][done] > 0.5
+            if torch.any(wins):
+                bonus_ratio = torch.mean(batch['strategic_bonus_ratio'][done][wins])
+                strategic_bonus_ratio_buf[position].append(bonus_ratio)
+            if strategic_bonus_ratio_buf[position]:
+                stats['strategic_bonus_ratio_'+str(position)] = torch.mean(
+                    torch.stack([_r for _r in strategic_bonus_ratio_buf[position]])
+                ).item()
+            else:
+                stats['strategic_bonus_ratio_'+str(position)] = 0.0
 
         optimizer.zero_grad()
         loss.backward()
@@ -196,6 +209,11 @@ class DMCTrainer:
         self.model_func = model_func
 
         self.mean_episode_return_buf = [deque(maxlen=100) for _ in range(self.num_players)]
+        self.strategic_bonus_ratio_buf = [deque(maxlen=100) for _ in range(self.num_players)]
+        self.strategic_reward_metrics = (
+            not self.is_pettingzoo_env
+            and getattr(self.env, "reward_mode", None) == "strategic_win_zero_sum"
+        )
 
         if cuda == "": # Use CPU
             self.device_iterator = ['cpu']
@@ -223,6 +241,7 @@ class DMCTrainer:
                 self.device_iterator,
                 pin_memory=pin_memory,
                 history_shape=self.history_shape if self.model_version == "v2" else None,
+                strategic_reward_metrics=self.strategic_reward_metrics,
             )
         else:
             buffers, self.num_buffers = create_buffers_pettingzoo(
@@ -262,6 +281,8 @@ class DMCTrainer:
         for p in range(self.num_players):
             stat_keys.append('mean_episode_return_'+str(p))
             stat_keys.append('loss_'+str(p))
+            if self.strategic_reward_metrics:
+                stat_keys.append('strategic_bonus_ratio_'+str(p))
         frames, stats = 0, {k: 0 for k in stat_keys}
 
         # Load models if any
@@ -276,6 +297,8 @@ class DMCTrainer:
                 for device in self.device_iterator:
                     models[device].get_agent(p).load_state_dict(learner_model.get_agent(p).state_dict())
             stats = checkpoint_states["stats"]
+            for key in stat_keys:
+                stats.setdefault(key, 0)
             frames = checkpoint_states["frames"]
             log.info(f"Resuming preempted job, current stats:\n{stats}")
 
@@ -310,6 +333,7 @@ class DMCTrainer:
                     self.training_device,
                     self.max_grad_norm,
                     self.mean_episode_return_buf,
+                    self.strategic_bonus_ratio_buf,
                     position_lock
                 )
 

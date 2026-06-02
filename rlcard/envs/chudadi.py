@@ -135,6 +135,10 @@ class ChudadiEnv(Env):
         if self.reward_mode == self.REWARD_SCORE:
             return self.game.get_payoffs()
 
+        reward_info = self.get_reward_info()
+        return self._zero_sum_win_targets(reward_info["winner"], reward_info["strategic_bonus"])
+
+    def get_reward_info(self):
         winner = self.game.winner_id
         if winner is None:
             payoffs = self.game.get_payoffs()
@@ -143,7 +147,11 @@ class ChudadiEnv(Env):
         bonus = 0.0
         if self.reward_mode == self.REWARD_STRATEGIC_WIN_ZERO_SUM:
             bonus = self._strategic_win_bonus(winner)
-        return self._zero_sum_win_targets(winner, bonus)
+        return {
+            "winner": winner,
+            "strategic_bonus": bonus,
+            "strategic_bonus_ratio": bonus,
+        }
 
     def _zero_sum_win_targets(self, winner: int, bonus: float = 0.0):
         winner_target = 1.0 + bonus
