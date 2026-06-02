@@ -1,7 +1,9 @@
 """Train ChuDaDi V3 with the original DMCTrainer training path.
 
 V3 keeps the DMC Monte Carlo final-payoff trainer unchanged while using the
-334-dimensional cumulative-history observation and a two-input dual-tower model.
+334-dimensional cumulative-history observation. The defaults intentionally stay
+close to the legacy V1/V2 DMC scripts: no log throttling, no reduced buffers,
+and per-seat checkpoints enabled.
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-actors", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--unroll-length", type=int, default=100)
-    parser.add_argument("--num-buffers", type=int, default=20)
+    parser.add_argument("--num-buffers", type=int, default=50)
     parser.add_argument("--num-threads", type=int, default=4)
     parser.add_argument("--max-grad-norm", type=float, default=40.0)
     parser.add_argument("--learning-rate", type=float, default=0.0001)
@@ -64,11 +66,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--momentum", type=float, default=0.0)
     parser.add_argument("--epsilon", type=float, default=0.00001)
     parser.add_argument("--exp-epsilon", type=float, default=0.01)
-    parser.add_argument("--log-every-learns", type=int, default=20, help="Write one CSV row per N learner updates.")
+    parser.add_argument("--log-every-learns", type=int, default=1, help="Write one CSV row per N learner updates.")
     parser.add_argument(
-        "--save-seat-checkpoints",
+        "--skip-seat-checkpoints",
         action="store_true",
-        help="Also save per-seat .pth files at each checkpoint. model.tar is always saved.",
+        help="Skip per-seat .pth files at checkpoints. model.tar is always saved.",
     )
     parser.add_argument(
         "--enable-baopei",
@@ -168,7 +170,7 @@ def config_snapshot(args: argparse.Namespace, total_frames: int, env: Any) -> di
         "epsilon": args.epsilon,
         "exp_epsilon": args.exp_epsilon,
         "log_every_learns": args.log_every_learns,
-        "save_seat_checkpoints": args.save_seat_checkpoints,
+        "save_seat_checkpoints": not args.skip_seat_checkpoints,
         "reward_mode": args.reward_mode,
         "enable_baopei": args.enable_baopei,
         "model_version": "v3",
@@ -233,7 +235,7 @@ def main() -> None:
         epsilon=args.epsilon,
         model_version="v3",
         log_every_learns=args.log_every_learns,
-        save_seat_checkpoints=args.save_seat_checkpoints,
+        save_seat_checkpoints=not args.skip_seat_checkpoints,
     )
     trainer.start()
 
