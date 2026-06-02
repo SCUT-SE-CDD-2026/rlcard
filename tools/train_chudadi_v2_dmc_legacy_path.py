@@ -73,9 +73,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exp-epsilon", type=float, default=0.01)
     parser.add_argument(
         "--reward-mode",
-        choices=("win_loss_zero_sum", "score"),
-        default="win_loss_zero_sum",
-        help="Training target. win_loss_zero_sum ignores score magnitude including baopei; score keeps raw game score.",
+        choices=("strategic_win_zero_sum", "win_loss_zero_sum", "score"),
+        default="strategic_win_zero_sum",
+        help=(
+            "Training target. strategic_win_zero_sum adds terminal suppression/advantage bonuses; "
+            "win_loss_zero_sum ignores score magnitude including baopei; score keeps raw game score."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -162,7 +165,8 @@ def config_snapshot(args: argparse.Namespace, total_frames: int, env: Any) -> di
         "epsilon": args.epsilon,
         "exp_epsilon": args.exp_epsilon,
         "reward_mode": args.reward_mode,
-        "training_ignores_baopei_score": args.reward_mode == "win_loss_zero_sum",
+        "training_ignores_baopei_score": args.reward_mode in {"strategic_win_zero_sum", "win_loss_zero_sum"},
+        "strategic_reward": args.reward_mode == "strategic_win_zero_sum",
         "model_version": "v2",
         "state_shape": env.state_shape,
         "action_shape": env.action_shape,

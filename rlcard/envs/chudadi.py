@@ -11,13 +11,28 @@ from rlcard.games.chudadi.utils import (
 
 
 class ChudadiEnv(Env):
+    REWARD_SCORE = "score"
+    REWARD_WIN_LOSS_ZERO_SUM = "win_loss_zero_sum"
+    REWARD_STRATEGIC_WIN_ZERO_SUM = "strategic_win_zero_sum"
+    SUPPRESSION_THREE_BONUS = 0.30
+    SUPPRESSION_TWO_BONUS = 0.20
+    ADVANTAGE_THREE_BONUS = 0.15
+    ADVANTAGE_TWO_BONUS = 0.10
+    MULTI_CARD_FINISH_BONUS = 0.10
+
     def __init__(self, config):
         from rlcard.games.chudadi import Game
 
         self.name = "chudadi"
         self.northern_rule = config.get("northern_rule", True)
         self.history_len = int(config.get("history_len", 13))
-        self.reward_mode = config.get("reward_mode", "score")
+        self.reward_mode = config.get("reward_mode", self.REWARD_SCORE)
+        if self.reward_mode not in {
+            self.REWARD_SCORE,
+            self.REWARD_WIN_LOSS_ZERO_SUM,
+            self.REWARD_STRATEGIC_WIN_ZERO_SUM,
+        }:
+            raise ValueError(f"Unsupported ChuDaDi reward mode: {self.reward_mode}")
         self.game = Game(northern_rule=self.northern_rule)
         super().__init__(config)
 
@@ -117,11 +132,84 @@ class ChudadiEnv(Env):
         return extracted_state
 
     def get_payoffs(self):
-        payoffs = self.game.get_payoffs()
-        if self.reward_mode == "win_loss_zero_sum":
+        if self.reward_mode == self.REWARD_SCORE:
+            return self.game.get_payoffs()
+
+        winner = self.game.winner_id
+        if winner is None:
+            payoffs = self.game.get_payoffs()
             winner = int(np.argmax(payoffs))
-            return [1 if player_id == winner else -1.0 / 3.0 for player_id in range(self.num_players)]
-        return payoffs
+
+        bonus = 0.0
+        if self.reward_mode == self.REWARD_STRATEGIC_WIN_ZERO_SUM:
+            bonus = self._strategic_win_bonus(winner)
+        return self._zero_sum_win_targets(winner, bonus)
+
+    def _zero_sum_win_targets(self, winner: int, bonus: float = 0.0):
+        winner_target = 1.0 + bonus
+        loser_target = -1.0 / (self.num_players - 1) - bonus / (self.num_players - 1)
+        return [winner_target if player_id == winner else loser_target for player_id in range(self.num_players)]
+
+    def _strategic_win_bonus(self, winner: int) -> float:
+        trace = self.game.round.trace
+        control_bonus = self._terminal_control_bonus(trace, winner)
+        multi_card_bonus = (
+            self.MULTI_CARD_FINISH_BONUS
+            if self._winner_has_multi_card_action_in_last_rounds(trace, winner, 2)
+            else 0.0
+        )
+        return control_bonus + multi_card_bonus
+
+    def _terminal_control_bonus(self, trace, winner: int) -> float:
+        if self._has_terminal_suppression(trace, winner, 3):
+            return self.SUPPRESSION_THREE_BONUS
+        if self._has_terminal_suppression(trace, winner, 2):
+            return self.SUPPRESSION_TWO_BONUS
+        if self._has_terminal_advantage(trace, winner, 3):
+            return self.ADVANTAGE_THREE_BONUS
+        if self._has_terminal_advantage(trace, winner, 2):
+            return self.ADVANTAGE_TWO_BONUS
+        return 0.0
+
+    def _winner_turn_indices(self, trace, winner: int):
+        return [index for index, (player_id, _) in enumerate(trace) if player_id == winner]
+
+    def _has_terminal_advantage(self, trace, winner: int, rounds: int) -> bool:
+        winner_indices = self._winner_turn_indices(trace, winner)
+        if len(winner_indices) < rounds:
+            return False
+        return all(not self._is_pass(trace[index][1]) for index in winner_indices[-rounds:])
+
+    def _has_terminal_suppression(self, trace, winner: int, rounds: int) -> bool:
+        winner_indices = self._winner_turn_indices(trace, winner)
+        if len(winner_indices) < rounds:
+            return False
+        terminal_indices = winner_indices[-rounds:]
+        if any(self._is_pass(trace[index][1]) for index in terminal_indices):
+            return False
+        for previous_index, next_index in zip(terminal_indices, terminal_indices[1:]):
+            if any(not self._is_pass(action) for _, action in trace[previous_index + 1 : next_index]):
+                return False
+        return True
+
+    def _winner_has_multi_card_action_in_last_rounds(self, trace, winner: int, rounds: int) -> bool:
+        winner_indices = self._winner_turn_indices(trace, winner)
+        for index in winner_indices[-rounds:]:
+            if self._card_count(trace[index][1]) > 1:
+                return True
+        return False
+
+    @staticmethod
+    def _is_pass(action) -> bool:
+        return action == "pass" or action == [] or action == tuple()
+
+    @staticmethod
+    def _card_count(action) -> int:
+        if action == "pass" or action == [] or action == tuple():
+            return 0
+        if isinstance(action, str):
+            return len(action.split())
+        return len(action)
 
     def _decode_action(self, action_id):
         if action_id == 0:
